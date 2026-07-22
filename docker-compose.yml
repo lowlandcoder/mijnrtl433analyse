@@ -1,0 +1,20 @@
+# Compose-bestand voor de RTL433-analysepagina.
+# Deze container draait op de sdr-server, waar de rtl433-container de metingen
+# naar events.jsonl schrijft. De analyse leest datzelfde bestand alleen-lezen.
+#
+# INVULLEN: het hostpad waar de rtl433-container /data op heeft staan.
+# Vind het met:
+#     docker inspect rtl433 --format '{{range .Mounts}}{{.Source}} -> {{.Destination}}{{"\n"}}{{end}}'
+# Neem de Source die hoort bij /data en zet die hieronder voor ':/data:ro'.
+
+services:
+  mijnrtl433analyse:
+    build: .
+    container_name: mijnrtl433analyse
+    restart: unless-stopped
+    environment:
+      DATA_FILE: "/data/events.jsonl"
+    ports:
+      - "8300:8000"          # nginx op de lab023-server schakelt hiernaartoe door
+    volumes:
+      - /PAD/NAAR/RTL433-DATA:/data:ro    # INVULLEN, zie hierboven
