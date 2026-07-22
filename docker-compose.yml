@@ -17,4 +17,4 @@ services:
     ports:
       - "8300:8000"          # nginx op de lab023-server schakelt hiernaartoe door
     volumes:
-      - /PAD/NAAR/RTL433-DATA:/data:ro    # INVULLEN, zie hierboven
+      - /opt/docker/rtl433/data:/data:ro    # rtl433-datamap op de sdr-server
