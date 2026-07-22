@@ -51,6 +51,94 @@ def _parse(t):
     return datetime.fromisoformat(t)
 
 
+def _naar_int(i):
+    try:
+        return int(i, 16)
+    except (ValueError, TypeError):
+        try:
+            return int(i)
+        except (ValueError, TypeError):
+            return None
+
+
+def cluster_voertuigen(rows):
+    """Groepeert bandensensoren (TPMS) tot voertuigen. Een auto heeft vier
+    banden die rond dezelfde tijd zenden; sensoren die telkens samen in korte
+    tijdvensters opduiken (zelfde model en protocol) horen bij één auto. Auto's
+    die permanent naast elkaar staan, zijn op tijd niet te scheiden; die worden
+    daarna gesplitst op de opeenvolgende id-nummering.
+
+    Geeft terug: (vaste voertuigen, geschat aantal passerende auto's)."""
+    ev = [(r["_t"], r.get("model"), str(r.get("id")), r.get("protocol"))
+          for r in rows if r.get("model") in TPMS_MODELLEN]
+    if not ev:
+        return [], 0
+    t0 = min(e[0] for e in ev)
+    BIN = 60
+    id_bins = collections.defaultdict(set)
+    idinfo = {}
+    bin_ids = collections.defaultdict(set)
+    id_times = collections.defaultdict(list)
+    for t, m, i, p in ev:
+        b = int((t - t0).total_seconds() // BIN)
+        k = (m, i, p)
+        id_bins[k].add(b); bin_ids[b].add(k); idinfo[k] = (m, p); id_times[k].append(t)
+
+    cooc = collections.Counter()
+    for keys in bin_ids.values():
+        keys = list(keys)
+        for a in range(len(keys)):
+            for c in range(a + 1, len(keys)):
+                if idinfo[keys[a]] == idinfo[keys[c]]:
+                    cooc[frozenset((keys[a], keys[c]))] += 1
+
+    adj = collections.defaultdict(set)
+    for pair, n in cooc.items():
+        k1, k2 = tuple(pair)
+        score = n / min(len(id_bins[k1]), len(id_bins[k2]))
+        if score >= 0.4 and n >= 3:
+            adj[k1].add(k2); adj[k2].add(k1)
+
+    seen = set(); comps = []
+    for k in id_bins:
+        if k in seen:
+            continue
+        stack = [k]; comp = []
+        while stack:
+            x = stack.pop()
+            if x in seen:
+                continue
+            seen.add(x); comp.append(x); stack.extend(adj[x] - seen)
+        comps.append(comp)
+
+    # Over-samengevoegde clusters (permanent samen) splitsen op id-nummering.
+    voertuigen = []
+    for comp in comps:
+        if len(comp) > 4:
+            mi = sorted((v, k) for k in comp if (v := _naar_int(k[1])) is not None)
+            groep = [mi[0][1]]
+            for (pv, _), (cv, k) in zip(mi, mi[1:]):
+                if cv - pv > 0x10000:
+                    voertuigen.append(groep); groep = [k]
+                else:
+                    groep.append(k)
+            voertuigen.append(groep)
+        else:
+            voertuigen.append(comp)
+
+    res = []
+    for v in voertuigen:
+        tot = sum(len(id_times[k]) for k in v)
+        alle = [t for k in v for t in id_times[k]]
+        span = (max(alle) - min(alle)).total_seconds() / 3600
+        res.append({"model": v[0][0], "ids": sorted(k[1] for k in v),
+                    "banden": len(v), "metingen": tot, "uur": span})
+    vast = sorted((r for r in res if r["uur"] > 12 and r["metingen"] >= 50),
+                  key=lambda r: -r["metingen"])
+    passant = [r for r in res if not (r["uur"] > 12 and r["metingen"] >= 50)]
+    return vast, len(passant)
+
+
 def _png(fig):
     b = io.BytesIO()
     fig.savefig(b, format="png", dpi=110, bbox_inches="tight")
@@ -91,6 +179,7 @@ def genereer():
 
     dev = collections.Counter((r.get("model"), str(r.get("id"))) for r in rows)
     modellen = collections.Counter(r.get("model") for r in rows)
+    vaste_voertuigen, passant_autos = cluster_voertuigen(rows)
 
     # Grafiek 1: temperatuur eigen sensor (Nexus-TH, sterkst vertegenwoordigd)
     th = [r for r in rows if r.get("model") == "Nexus-TH" and "temperature_C" in r]
@@ -136,12 +225,11 @@ def genereer():
     ax.set_title("Meest gehoorde apparaten", color=TXT, loc="left"); ax.grid(True, axis="x", alpha=.3)
     grafieken.append(("Meest gehoorde apparaten", _png(fig), ""))
 
-    resident = len([k for k, v in cnt.items() if v >= 100])
     kpis = [
         (len(rows), "metingen"),
         (len(dev), "unieke apparaten"),
-        (len(modellen), "modellen"),
-        (f"{len(rows) / span_h:.0f}", "metingen/uur"),
+        (len(vaste_voertuigen), "vaste voertuigen"),
+        (passant_autos, "passerende auto's"),
     ]
 
     inhoud = f"""
@@ -153,10 +241,26 @@ def genereer():
     <div class="kaart"><ul>
       <li><b>Eigen sensoren</b> — o.a. de Nexus-TH weersensor, de hele periode aanwezig met sterk signaal.</li>
       <li><b>Eigen huisautomatisering (433 MHz)</b> — schakelaars en melders dichtbij. Deze verschijnen soms onder meerdere namen tegelijk; dat is één apparaat dat door meerdere decoders wordt herkend.</li>
-      <li><b>Vaste auto's</b> — {resident} bandensensoren die dichtbij blijven; vrijwel zeker eigen of vlak-naast geparkeerde auto's.</li>
-      <li><b>Passerend verkeer</b> — {len(passant)} verschillende bandensensoren die kort langskwamen: evenzoveel voorbijrijdende auto's.</li>
+      <li><b>Vaste voertuigen</b> — {len(vaste_voertuigen)} auto's dichtbij, geclusterd uit hun bandensensoren; vrijwel zeker eigen of vlak-naast geparkeerd.</li>
+      <li><b>Passerend verkeer</b> — naar schatting {passant_autos} voorbijrijdende auto's in deze periode.</li>
       <li><b>Overige</b> — losse afstandsbedieningen en een enkele beveiligingsmelder, plus enkele ruis-decodes.</li>
     </ul></div>
+    """
+
+    if vaste_voertuigen:
+        rijen_v = "".join(
+            f'<li><b>auto_{n}</b> — {v["model"]}, '
+            f'{v["banden"]} {"band" if v["banden"] == 1 else "banden"}, '
+            f'{v["uur"]:.0f} uur aanwezig <span class="muted">({", ".join(v["ids"])})</span></li>'
+            for n, v in enumerate(vaste_voertuigen, 1)
+        )
+        inhoud += f"""
+    <h2>Voertuigen</h2>
+    <div class="kaart">
+      <p>De vier banden van een auto zenden rond dezelfde tijd. Sensoren die telkens samen opduiken (zelfde model en protocol) worden tot één auto gegroepeerd; auto's die permanent naast elkaar staan, worden op hun opeenvolgende id-nummering gescheiden.</p>
+      <ul>{rijen_v}</ul>
+      <p class="muted">Passerend verkeer: naar schatting {passant_autos} auto's. Elke passant wordt meestal met maar één band gehoord, dus dat aantal ligt dicht bij het aantal losse sensoren. Clusteren is een benadering.</p>
+    </div>
     """
     for titel, bron, bijschrift in grafieken:
         inhoud += f'<h2>{titel}</h2><div class="kaart"><img src="{bron}" alt="{titel}">'

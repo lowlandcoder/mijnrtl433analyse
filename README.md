@@ -60,6 +60,16 @@ opnieuw gemaakt uit de actuele data.
 4. Op `mijnsdr.lab023.nl` staat de kaart MijnRTL433-analyse al klaar (repository
    `mijnsdr`).
 
+## Voertuigen uit bandensensoren
+
+De pagina groepeert bandensensoren (TPMS) tot voertuigen. De vier banden van een
+auto zenden rond dezelfde tijd; sensoren die telkens samen in korte tijdvensters
+opduiken (zelfde model en protocol) horen bij één auto. Auto's die permanent
+naast elkaar geparkeerd staan, zijn op tijd alleen niet te scheiden en worden
+daarna gesplitst op hun opeenvolgende id-nummering. Vaste voertuigen komen als
+`auto_1`, `auto_2`, … in beeld; passerend verkeer wordt geschat als aantal
+auto's. Het clusteren is een benadering.
+
 ## Aandachtspunten
 
 - Met één stick verzamelt RTL433 alleen data als die container draait; de
